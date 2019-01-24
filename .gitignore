@@ -1,0 +1,8 @@
+.DS_STORE
+README.md
+.vscode/
+android/
+build/
+ios/
+venv/
+src/__pycache__/

@@ -1,0 +1,522 @@
+from enamlnative.core.api import *
+from enamlnative.widgets.api import *
+from enamlnative.core.app import BridgedApplication
+from enaml.application import Application
+from enamlnative.android.app import AndroidApplication
+from atom.api import *
+import ast
+import json
+import hashlib
+import os
+import sys
+import pathlib
+
+
+
+from enamlnative.core.dev import DevServerSession
+
+
+#Stuff for executing remote code
+from enaml.core.enaml_compiler import EnamlCompiler
+from enaml.core.parser import parse
+from enaml.compat import exec_
+import types
+from enaml import imports
+
+
+
+
+
+class Message(Atom):
+    subject = Unicode()
+    message = Unicode()
+    id = Int()
+    from_name = Unicode()
+    timestamp = Int()
+    preview = Unicode()
+    url = Unicode()
+
+class Folder(Atom):
+    name = Unicode()
+    messages = List(Message)
+
+class User(Atom):
+    username = Unicode()
+    password = Unicode()
+    sid = Unicode()
+    mailboxes = List(Folder)
+
+
+
+class App(Atom):
+    theme_color = Unicode("#cab")
+    httpclient = Instance(AsyncHttpClient, ())
+    server_url = Unicode()
+    headers = Dict()
+    
+    sid = Unicode()
+    username = Unicode('youpsla@gmail.com')
+    password = Unicode('372010')
+    current_user = Instance(User)
+    
+    mailboxes = List(Folder, [])
+    current_mailbox = Instance(Folder)
+    current_message = Instance(Message)
+    
+    msg_url = Unicode()
+    msg_list = List(Message)
+
+    logs = Unicode()
+
+    session = DevServerSession.instance()
+
+    dynview = Instance(types.CodeType)
+
+    test_code = """
+enamldef Remote(Flexbox):
+    TextView: txt:
+       attr clicks = 0
+       text << "Click me: {}".format(self.clicks)
+       clickable = True
+       clicked :: self.clicks +=1
+"""
+
+    flag = Int(0)
+
+
+
+
+
+    def do_reload(self, path, *args):
+        #ast = parse(self.test_code, filename="testtest")
+        #code = EnamlCompiler.compile(ast, "testtest")
+        #namespace = namespace or {}
+        #exec_(code, namespace)
+        #return namespace[item]
+        
+        #self.dynview = code
+        self.flag = 1
+
+        # self.logs = code
+        
+        # Restore it
+        # session = DevServerSession.instance()
+        # with open(path) as f:
+            # self.logs = f.name
+            # self.session.do_reload({'files':{'view.enaml': f.read()}})
+        #local_storage = os.environ["EXTERNAL_STORAGE"]
+        #f = os.path.join(local_storage, "EACNative", 'test.txt')
+        #with open(f) as f:
+        #    session.do_reload({'files':{'view.enaml': f.read()}})
+
+
+    def create_local_file(self):
+        # Init local storage
+        # local_storage = os.environ["EXTERNAL_STORAGE"]
+        # pathlib.Path(os.path.join(local_storage, "EACNative")).mkdir(exist_ok=True)
+        # os.mkdir(os.path.join(os.environ['EXTERNAL_STORAGE'], "EACNative"))
+        # f = open("/storage/emulated/0/EACNative/localeac.txt", 'w+')
+
+        dir_path = os.path.abspath(os.path.split(os.path.dirname(__file__))[0])
+        self.logs += ' ' + sys.path[-1] + ' ' + dir_path
+
+        f = open(os.path.join(dir_path, 'test.txt'), "w+")
+        f.write("""
+
+enamldef ContentView(Flexbox):
+    flex_direction = "column"
+    Textview:
+        text = "Nanana"
+        """)
+        f.close()
+        # import time
+        # time.sleep(3)
+        # f_test = os.path.join(local_storage, "EACNative", 'test.txt')
+        with open(f.name) as f:
+            self.logs = f.read()
+        self.do_reload(f.name)
+        
+        # with open(os.path.join(sys.path[-1], path)) as f:
+
+
+
+    def login(self):
+        client = self.httpclient
+        #Application = BridgedApplication.instance()
+        f = Application.instance().create_future()
+
+        def on_server_url(r):
+            if r.ok:
+                self.server_url = ast.literal_eval(r.body)[1]
+                params = json.dumps(dict(login= self.username, password=self.password))
+
+                self.logs = r.body
+                client.fetch('{}/restapi.py?action_name=login&xml_data={}'.format(ast.literal_eval(r.body)[1], params), callback = on_login_get_mailboxes)
+            else:
+                self.logs = str(r.body)
+                f.set_result('Error in logging')
+
+        def on_login_get_mailboxes(r):
+            if r.ok:
+                self.logs = r.body
+                sid = json.loads(r.body)[1]['sid']
+                self.sid = sid
+                self.logs = sid
+                
+                self.current_user = User(username=self.username, password=self.password, sid=sid)
+                
+                #Set parameters because sid params doesn't works for eac_list
+                headers = {'Content-type': 'application/x-www-form-urlencoded', 'Accept': 'text/plain'}
+                headers['cookie'] = "sid={}".format(sid)
+                self.headers = headers
+                client.fetch('{}/restapi.py?action_name=list_mailboxes'.format(self.server_url), on_mailboxes_eac_list, headers = headers)
+            else:
+                f.set_result('Error in getting mailboxes')
+                
+ 
+        def on_mailboxes_eac_list(r):
+            if r.ok:
+                #self.current_folder = json.loads(r.body)[1][0]
+                self.logs = str(json.loads(r.body)[1])
+                mailboxes = json.loads(r.body)[1]
+                tmp_list = []
+                for m in mailboxes:
+                    tmp_list.append(Folder(name=m))
+                
+                first = tmp_list[0]
+                self.mailboxes = tmp_list
+                
+                self.current_mailbox = self.mailboxes[0]
+
+                dic = {'Content-type': 'application/x-www-form-urlencoded', 'Accept': 'text/plain'}
+                dic['cookie'] = "sid={}".format(self.sid)
+                self.headers = dic
+                url = "{}/restapi.py?action_name=eac_list&xml_data={}".format(self.server_url, json.dumps(dict(mailbox=first.name)))
+                client.fetch(url, on_login_complete, headers = self.headers) 
+
+            else:
+                f.result('Error in setting folder list')
+        
+        def on_login_complete(r):
+            if r.ok:
+                self.logs = r.body
+                f.set_result('loggedin')
+                tmp_list = []
+                for item in json.loads(r.body)[1][0:30]:
+                    tmp_list.append(Message(id=item['id'],
+                                                subject=item['subject'],
+                                                from_name=item['from_name'],
+                                                preview=item['preview'],
+                                                timestamp=item['timestamp'],
+                                                url = "{}/eacviewer_mobile?id={}&mailbox=@AppInMail&sid={}".format(self.server_url, item['id'], self.sid),
+                                                ))
+                self.current_mailbox.messages = tmp_list
+            else:
+                f.set_result('Error while getting eac_list')
+        
+        # Do first fetch
+        url = "https://admin.appinmail.io/api/v1/experimental/promail/prepare_user_runtime?user_id={}&password_md5={}".format(self.username, hashlib.md5(self.password.encode('utf-8')).hexdigest())
+        client.fetch(url, callback = on_server_url)
+        return f
+
+
+
+enamldef Dynbox(Flexbox): view:
+    attr app: App
+    attr source: Unicode
+
+
+    
+    # TextView:
+    #    text = "dededededededede"
+
+
+
+
+
+
+
+enamldef Drawer(ScrollView): view:
+    #: Must have gravity AND width
+    attr app: App
+    width = 200
+    attr side = 'left'
+    gravity << side # Use an attr since this gets converted to an int
+    background_color = "#fff"
+    Flexbox:
+        flex_direction = "column"
+        Flexbox:
+            padding = (10,10,10,10)
+            #Icon:
+            #    width = "64"
+            #    text = "{fa-user}"
+            #    text_size = 32
+            Flexbox:
+                flex_direction = "column"
+                padding = (20, 0, 0, 0)
+                Conditional:
+                    condition << app.current_user is not None
+                    TextView:
+                        text << app.current_user.username
+                        font_family = "sans-serif-medium"
+                    TextView:
+                        text << app.current_user.sid
+
+
+       
+enamldef BottomNav(Toolbar): view:
+    attr pager 
+    background_color = "#ccc"
+    height = "100"
+    attr active_color = "#039be5"
+    Flexbox:
+        justify_content = "space_between"
+        align_items = "center"
+        Looper:
+            iterable << pager.pages
+            #IconButton:
+            #    text = loop_item.icon
+            #    text_color << view.active_color if pager.current_index == loop_index else "#777"
+            #    text_size = 32
+            #    flat = True
+            #    clicked :: pager.current_index = loop_index
+
+
+enamldef SignInScreen(PagerFragment): view:
+    icon = "{md-home}"
+    attr app: App
+    attr pager << view.parent
+    attr working = False
+
+    attr app1 = AndroidApplication.instance()
+
+    func compile_source(source, item, filename='<remote>', namespace=None):
+        ast = parse(source, filename)
+        code = EnamlCompiler.compile(ast, filename)
+        with imports():
+            exec_(code)
+        # self.app.logs = '--'.join("%s:%s" % (str(k), str(v)) for (k, v) in globals().iteritems())
+        # return namespace[item]
+
+    Flexbox:
+        flex_direction = "column"
+        background_color = "#eee"
+        justify_content = "center"
+        padding = (30, 30, 30, 30)
+
+        Flexbox:
+            justify_content="center"
+            Conditional:
+                condition << view.app.flag == 1
+                Include:
+                    objects = [globals()["Remote"]()]
+            Flexbox:
+                height="wrap_content"
+                width="wrap_content"
+                flex_direction="column"
+                justify_content="center"
+                #background_color="#f00"
+                #Icon:
+                #    text = "{fa-rocket}"
+                #    text_size = 128
+                #    text_color << view.app.theme_color
+                TextView:
+                    text_alignment = 'center'
+                    text = "Appinmail"
+                    text_size = 40
+
+        Conditional: cond:
+            condition << bool(view.working)
+            Flexbox:
+                justify_content="center"
+                ActivityIndicator:
+                    padding = (0,10,0,0)
+                    size="large"                    
+        
+        Conditional: cond1:
+            condition << bool(not view.working)
+        
+            Flexbox:
+                flex_direction = "column"
+                #layout = dict(flex_basis=0.4)
+                TextView:
+                   text = "Username"
+                   
+                EditText: username:
+                    text := view.app.username
+                        
+                TextView:
+                   text = "Password"
+                EditText: password:
+                    text := view.app.password
+                    input_type = "text_web_password"
+                
+                ScrollView:
+                    height = '100'
+                    TextView: logs:
+                       text << view.app.logs            
+                Button:
+                    attr root << view
+                    text = "Enter"
+                    # text_color = "#f00"
+                    font_family = "sans-serif-light"
+                    text_size = 32
+                    flat = True
+                    background_color << view.app.theme_color
+    
+                    func on_login_result(f):
+                        # logs.text = f
+                        if f == 'loggedin':
+                            view = self.root
+                            view.pager.current_index +=1
+                        else:
+                            logs.text='Pager issue'
+    
+                    clicked ::
+                        # do_reload(view.app.f_test)
+                        # view.working = True
+                        # view.compile_source(view.app.test_code, "dynitem")
+                        # view.app.flag = 1
+                        # view.app.create_local_file()
+                        # self.root.app1.has_permission("android.permission.WRITE_EXTERNAL_STORAGE").then(lambda r, s=view.cond1.logs:setattr(s,'text',"Allowed:{}".format(r)))
+                        view.app.login().then(on_login_result)
+                        # view.app.login()
+            
+
+
+enamldef HomeScreen(PagerFragment): view:
+    icon = "{md-mail}"
+    title = "Mail"
+    attr app: App
+    attr pager << view.parent
+    attr root << view.parent.root
+    
+    attr screens << view.parent.root.screens
+
+    
+
+    Flexbox:
+        flex_direction='column'
+        Toolbar:
+            height = "80"
+            content_padding = (0,0,0,0)
+            background_color = "#123"
+            Flexbox:
+                align_items = "center"
+                #IconButton:
+                #    text = "{md-menu}"
+                #    text_size = 24
+                #    text_color = "#fff"
+                #    width = "50"
+                #    flat = True
+                #    clicked :: view.root.opened = [view.root.menu_drawer]
+                    
+                Conditional:
+                    condition << view.app.current_mailbox is not None
+                    TextView:
+                        text << "Mailbox: {}".format(view.app.current_mailbox.name)
+                        text_color = "#fff"
+                        text_size = 24
+                        font_family = "sans-serif-medium"
+
+        Flexbox:
+            #flex_basis = 0.8
+            flex_direction='column'
+            Conditional:
+                condition << view.app.current_mailbox is not None
+                ScrollView:
+                    Flexbox:
+                        flex_direction = 'column'
+                        Looper:
+                            iterable << view.app.current_mailbox.messages
+                            Flexbox:
+                                clickable = True
+                                padding = (5,10,5,10)
+                                align_items = "center"
+                                clicked::
+                                    view.app.current_message = loop_item
+                                    view.pager.current_index +=1
+                                #Icon:
+                                #    flex_basis=0.1
+                                #    text = "{fa-user}"
+                                #    text_size = 32
+                                Flexbox:
+                                    padding = (0,0,0,0)
+                                    flex_basis=0.9
+                                    flex_direction = "column"
+
+                                    TextView: from_name:
+                                        text << loop_item.from_name
+                                        font_family = "sans-serif-medium"
+                                    TextView: subject:
+                                        text << loop_item.subject
+                                    Flexbox: 
+                                        #: Add a bottom border
+                                        height="1"
+                                        background_color = "#ccc"
+
+        BottomNav:
+            pager << view.screens
+
+
+enamldef MessageScreen(PagerFragment): view:
+    icon = "{md-arrow-back}"
+    attr app: App
+    attr pager << view.parent
+    attr msg_url
+
+    Flexbox:
+        flex_direction='column'
+        Conditional:
+            condition << view.app.current_message is not None
+            Toolbar:
+                height = "100"
+                content_padding = (0,0,0,0)
+                background_color = "#123"
+                Flexbox:
+                    align_items = "center"
+                    IconButton:
+                        text = "{md-arrow-back}"
+                        text_size = 24
+                        text_color = "#fff"
+                        width = "50"
+                        flat = True
+                        clicked ::
+                            view.pager.current_index -=1
+                    TextView:
+                        text << view.app.current_message.subject
+                        text_color = "#fff"
+                        text_size = 24
+                        font_family = "sans-serif-medium"
+
+            Flexbox:
+                flex_direction = 'column'
+                WebView: webview:
+                    zoom_out = True
+                    javascript_enabled = True
+                    url << view.app.current_message.url
+
+
+enamldef ContentView(DrawerLayout): root:
+    #: Our app state
+    attr app = App()
+    attr menu_drawer = menu_drawer
+    alias screens
+    Flexbox:
+        flex_direction = "column"
+        ViewPager: screens:
+            attr root << root
+            padding=(0,0,0,0)
+            #: Don't let them go by swiping!
+            paging_enabled = False
+            SignInScreen:
+                app << root.app
+            HomeScreen:
+                app << root.app
+            MessageScreen: msg_screen:
+                app << root.app
+
+    
+    Drawer: menu_drawer:
+        side = "left"
+        app << root.app
